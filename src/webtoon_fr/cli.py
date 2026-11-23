@@ -14,7 +14,21 @@ def _progres(etape, message, fraction=None):
         print(f"[{etape}] {message}", flush=True)
 
 
+def utiliser_certificats_systeme():
+    """Python utilise les certificats du système (Windows, macOS) au lieu de sa propre liste.
+
+    Nécessaire quand un antivirus ou un proxy d'entreprise inspecte les connexions HTTPS :
+    la vérification reste active, elle s'appuie simplement sur les certificats auxquels le système fait confiance.
+    """
+    try:
+        import truststore
+        truststore.inject_into_ssl()
+    except ImportError:
+        pass
+
+
 def main(argv=None):
+    utiliser_certificats_systeme()
     p = argparse.ArgumentParser(prog="webtoon-fr", description="Traduction de webtoons anglais -> français")
     sp = p.add_subparsers(dest="cmd", required=True)
 

@@ -1,5 +1,9 @@
 # Historique des versions
 
+## v1.0.1 — 23 novembre 2026
+
+- Correction : les connexions HTTPS utilisent les certificats du système (Windows, macOS). Corrige l'erreur `CERTIFICATE_VERIFY_FAILED` quand un antivirus ou un proxy d'entreprise inspecte les connexions. La vérification reste active.
+
 ## v1.0.0 — 23 novembre 2026
 
 Première version.

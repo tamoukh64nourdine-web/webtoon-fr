@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "webtoon-fr"
-version = "1.0.0"
+version = "1.0.1"
 description = "Traduction de webtoons et de manhwa de l'anglais vers le français"
 requires-python = ">=3.11"
 dependencies = [
@@ -21,6 +21,7 @@ dependencies = [
   "pyphen>=0.15",
   "fonttools>=4.50",
   "anthropic>=0.40",
+  "truststore>=0.9",
 ]
 
 [project.optional-dependencies]
