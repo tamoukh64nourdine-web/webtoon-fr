@@ -1,0 +1,60 @@
+# Configuration du pipeline webtoon-fr (v1)
+# Les réglages du LLM (fournisseur, modèle, clé) se font dans l'interface web,
+# onglet Réglages, ou par variables d'environnement (voir README).
+
+[chemins]
+series = "series"
+fonts = "fonts"
+modeles = "~/.cache/webtoon-fr"
+
+[recuperation]
+largeur_min = 600          # px : images plus étroites écartées
+poids_min_ko = 10          # Ko : images plus légères écartées
+requetes_paralleles = 2
+pause_s = 0.5
+essais = 3
+hauteur_min_bande = 3000   # px : en dessous, récupération jugée incomplète
+images_min = 3
+
+[detection]
+moteur = "auto"            # auto | rtdetr | ocr
+hauteur_tuile = 1536
+chevauchement = 256
+fusion_recouvrement = 0.5  # recouvrement horizontal pour fusionner deux morceaux de bulle
+seuil_score_ligne = 0.5
+
+[ocr]
+seuil_confiance = 0.80
+agrandir_sous_px = 60
+
+[traduction]
+hauteur_scene = 2500
+cote_max_image = 1568
+qualite_jpg_scene = 80
+images_max_par_appel = 20
+bulles_max_par_appel = 120
+delai_max_s = 180
+pauses_essais_s = [5, 20, 60]
+bulles_contexte_lot = 5
+
+[nettoyage]
+dilatation_px = 4
+ecart_type_uni = 12.0      # sous ce seuil, l'intérieur de la bulle est considéré comme uni
+lama_url = "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx"
+
+[rendu]
+police = "ComicNeue-Bold.ttf"
+police_emphase = "ComicNeue-Bold.ttf"
+taille_max = 40
+taille_min_ratio = 0.0175  # 14 px pour 800 px de large
+marge_px = 6
+marge_min_px = 2
+interligne = 1.2
+interligne_min = 1.05
+condensation = 0.88
+seuil_emphase = 1.5
+
+[export]
+hauteur_image = 1600
+qualite_jpg = 95
+historique_max = 10
