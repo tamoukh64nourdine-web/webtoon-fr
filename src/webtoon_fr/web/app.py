@@ -1,6 +1,7 @@
 """API web (FastAPI) + interface. Lancement : `webtoon-fr web` puis http://127.0.0.1:8765"""
 from __future__ import annotations
 
+import re
 import shutil
 import tempfile
 import threading
@@ -18,6 +19,7 @@ from pydantic import BaseModel
 from .. import pipeline
 from ..config import chemin, enregistrer_reglages, reglages
 from ..export import archive
+from ..fetch import ErreurRecuperation, lire_rapport, modifier_selection
 from ..models import (Chapitre, dossier_chapitre, dossier_serie, ecrire_contexte, ecrire_glossaire, lire_contexte,
                       lire_glossaire, lister_series, nom_valide)
 
@@ -52,6 +54,7 @@ def _lancer(type_: str, serie: str, numero: str, fonction) -> dict:
             t["etat"], t["message"] = "termine", "Terminé."
         except Exception as e:  # l'erreur est montrée telle quelle dans l'interface
             t["etat"], t["erreur"] = "erreur", str(e) or e.__class__.__name__
+            t["cause"] = getattr(e, "cause", None)
             t["trace"] = traceback.format_exc()[-3000:]
         t["fin"] = time.time()
 
@@ -123,38 +126,110 @@ def put_contexte(serie: str, t: Texte):
 # --- chapitres ---------------------------------------------------------------------------
 
 @app.post("/api/series/{serie}/chapitres")
-async def nouveau_chapitre(serie: str, numero: str = Form(...), url: str = Form(""),
+async def nouveau_chapitre(serie: str, numero: str = Form(...), mode: str = Form("lien"), url: str = Form(""),
+                           verifier: bool = Form(True), fichiers: list[UploadFile] | None = File(None),
                            images: list[UploadFile] | None = File(None)):
+    """Nouveau chapitre. mode = lien (un ou plusieurs liens, un par ligne) | images | page (page enregistrée).
+
+    Avec verifier=True (liens et page enregistrée), seule la récupération est lancée : l'interface montre
+    ensuite les images gardées et écartées, et la traduction part de la sélection validée.
+    """
     serie = nom_valide(serie)
     numero = numero.strip()
     if not numero:
         raise HTTPException(400, "Indique le numéro du chapitre.")
-    url = url.strip()
-    fichiers = []
-    if not url and not images:
-        raise HTTPException(400, "Colle le lien de la page du chapitre ou ajoute ses images.")
-    if url and not url.startswith(("http://", "https://")):
-        raise HTTPException(400, "Le lien doit commencer par http:// ou https://.")
+    envoyes = (fichiers or []) + (images or [])
+    urls = [u for u in re.split(r"\s+", url.strip()) if u]
+    if mode == "lien":
+        if not urls:
+            raise HTTPException(400, "Colle le lien de la page du chapitre (un par ligne si le chapitre est sur plusieurs pages).")
+        mauvais = [u for u in urls if not u.startswith(("http://", "https://"))]
+        if mauvais:
+            raise HTTPException(400, f"Ce lien doit commencer par http:// ou https:// : {mauvais[0][:80]}")
+    elif not envoyes:
+        raise HTTPException(400, "Ajoute les images du chapitre." if mode == "images" else
+                            "Ajoute la page enregistrée : le fichier .html et son dossier d'images, ou un .zip des deux.")
+
     tmp = None
-    if not url:
+    chemins: list[Path] = []
+    if envoyes:
         tmp = Path(tempfile.mkdtemp(prefix="webtoon-fr-"))
-        for i, im in enumerate(images or []):
-            nom = Path(im.filename or f"{i:03d}.png").name
-            if Path(nom).suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
-                continue
-            (tmp / nom).write_bytes(await im.read())
-            fichiers.append(tmp / nom)
-        if not fichiers:
-            raise HTTPException(400, "Aucune image JPG, PNG ou WebP reçue.")
+        for i, f in enumerate(envoyes):
+            # le navigateur peut envoyer un chemin relatif (dossier sélectionné) : on garde l'arborescence
+            rel = Path(*[p for p in Path((f.filename or f"{i:03d}").replace("\\", "/")).parts if p not in ("..", "/")])
+            cible = tmp / rel
+            cible.parent.mkdir(parents=True, exist_ok=True)
+            cible.write_bytes(await f.read())
+            chemins.append(cible)
+        if mode == "images":
+            chemins = [c for c in chemins if c.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".avif"}]
+            if not chemins:
+                raise HTTPException(400, "Aucune image JPG, PNG, WebP ou AVIF reçue.")
+
+    def nettoyer():
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    page = chemins if mode == "page" else None
+    imgs = chemins if mode == "images" else None
+    if verifier and mode in ("lien", "page"):
+        def recup(progres):
+            try:
+                pipeline.preparer_source(serie, numero, urls or None, None, lambda m, f=None: progres("recuperation", m, f), page)
+            finally:
+                nettoyer()
+        return _lancer("recuperation", serie, numero, recup)
 
     def faire(progres):
         try:
-            pipeline.tout(serie, numero, url or None, fichiers or None, progres)
+            pipeline.tout(serie, numero, urls or None, imgs, progres, page_enregistree=page)
         finally:
-            if tmp:
-                shutil.rmtree(tmp, ignore_errors=True)
+            nettoyer()
 
     return _lancer("complet", serie, numero, faire)
+
+
+@app.get("/api/series/{serie}/chapitres/{numero}/source")
+def source_chapitre(serie: str, numero: str):
+    d = dossier_chapitre(serie, numero)
+    r = lire_rapport(d / "source")
+    if r is None:
+        raise HTTPException(404, "Aucune récupération enregistrée pour ce chapitre.")
+    r["base"] = f"/fichiers/{nom_valide(serie)}/{d.name}/source/brut"
+    r["traduit"] = (d / "chapitre.json").exists()
+    return r
+
+
+class Selection(BaseModel):
+    garder: list[int] = []
+    ecarter: list[int] = []
+
+
+@app.put("/api/series/{serie}/chapitres/{numero}/source")
+def selection_source(serie: str, numero: str, s: Selection):
+    try:
+        modifier_selection(dossier_chapitre(serie, numero) / "source", s.garder, s.ecarter)
+    except ErreurRecuperation as e:
+        raise HTTPException(400, str(e))
+    return source_chapitre(serie, numero)
+
+
+@app.post("/api/series/{serie}/chapitres/{numero}/source/relancer")
+def relancer_recuperation(serie: str, numero: str):
+    r = lire_rapport(dossier_chapitre(serie, numero) / "source")
+    if not r or not r.get("liens"):
+        raise HTTPException(400, "Ce chapitre ne vient pas d'un lien : importe à nouveau ses images ou la page enregistrée.")
+    return _lancer("recuperation", serie, numero,
+                   lambda p: pipeline.preparer_source(serie, numero, r["liens"], None,
+                                                      lambda m, f=None: p("recuperation", m, f)))
+
+
+@app.post("/api/series/{serie}/chapitres/{numero}/traduire")
+def traduire_selection(serie: str, numero: str):
+    src = dossier_chapitre(serie, numero) / "source"
+    if not src.exists() or not any(f.is_file() and re.fullmatch(r"\d{3}\.\w+", f.name) for f in src.iterdir()):
+        raise HTTPException(400, "Aucune image gardée pour ce chapitre.")
+    return _lancer("complet", serie, numero, lambda p: pipeline.tout(serie, numero, None, None, p))
 
 
 @app.get("/api/series/{serie}/chapitres/{numero}")

@@ -12,7 +12,7 @@ from .clean import nettoyer
 from .config import config
 from .detect import detecter
 from .export import exporter
-from .fetch import recuperer
+from .fetch import importer_page_enregistree, recuperer
 from .group import construire_bulles, reporter_verrouillees
 from .ingest import lister_images, recoller
 from .models import Chapitre, ajouter_resume, dossier_chapitre, ecrire_glossaire, lire_glossaire
@@ -24,12 +24,18 @@ def _noop(*a):
     pass
 
 
-def preparer_source(serie: str, numero: str, url: str | None = None, fichiers: list[Path] | None = None,
-                    progres=_noop) -> Path:
+def preparer_source(serie: str, numero: str, url: str | list[str] | None = None, fichiers: list[Path] | None = None,
+                    progres=_noop, page_enregistree: list[Path] | None = None) -> Path:
+    """Remplit source/ : depuis un ou plusieurs liens, une page enregistrée, ou des images importées.
+
+    Sans aucune de ces sources, utilise ce qui est déjà dans source/ (récupération vérifiée à l'avance).
+    """
     dossier = dossier_chapitre(serie, numero)
     source = dossier / "source"
     if url:
         recuperer(url, source, progres)
+    elif page_enregistree:
+        importer_page_enregistree(page_enregistree, source, progres)
     elif fichiers:
         source.mkdir(parents=True, exist_ok=True)
         for f in source.iterdir():
@@ -42,9 +48,10 @@ def preparer_source(serie: str, numero: str, url: str | None = None, fichiers: l
     return dossier
 
 
-def analyser(serie: str, numero: str, url: str | None = None, fichiers: list[Path] | None = None,
-             progres=_noop, traduire_aussi: bool = True) -> Chapitre:
-    dossier = preparer_source(serie, numero, url, fichiers, lambda m, f=None: progres("recuperation", m, f))
+def analyser(serie: str, numero: str, url: str | list[str] | None = None, fichiers: list[Path] | None = None,
+             progres=_noop, traduire_aussi: bool = True, page_enregistree: list[Path] | None = None) -> Chapitre:
+    dossier = preparer_source(serie, numero, url, fichiers, lambda m, f=None: progres("recuperation", m, f),
+                              page_enregistree)
     cache = Cache(dossier / "cache")
     progres("recollage", "Recollage des images en une bande…", None)
     bande, info = recoller(lister_images(dossier / "source"))
@@ -124,6 +131,7 @@ def rendre_chapitre(serie: str, numero: str, progres=_noop) -> Chapitre:
     return chap
 
 
-def tout(serie: str, numero: str, url: str | None = None, fichiers: list[Path] | None = None, progres=_noop) -> Chapitre:
-    analyser(serie, numero, url, fichiers, progres)
+def tout(serie: str, numero: str, url: str | list[str] | None = None, fichiers: list[Path] | None = None,
+         progres=_noop, page_enregistree: list[Path] | None = None) -> Chapitre:
+    analyser(serie, numero, url, fichiers, progres, page_enregistree=page_enregistree)
     return rendre_chapitre(serie, numero, progres)

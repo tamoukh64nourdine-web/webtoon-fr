@@ -194,6 +194,13 @@ def lister_series() -> list[dict]:
         chs = []
         for c in d.glob("ch-*"):
             f = c / "chapitre.json"
+            rapport = c / "source" / "rapport.json"
+            if not f.exists() and rapport.exists():
+                r = json.loads(rapport.read_text("utf-8"))
+                res = r.get("resume", {})
+                chs.append({"numero": c.name[3:], "etat": "recupere_incomplet" if res.get("manquantes") else "recupere",
+                            "bulles": 0, "a_verifier": 0, "images": res.get("gardees", 0), "maj": rapport.stat().st_mtime})
+                continue
             if f.exists():
                 j = json.loads(f.read_text("utf-8"))
                 n_verif = sum(1 for b in j.get("bulles", []) if b.get("a_verifier"))

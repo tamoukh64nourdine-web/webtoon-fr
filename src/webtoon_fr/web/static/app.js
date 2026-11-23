@@ -29,7 +29,8 @@ function toast(msg, erreur = false) {
 }
 
 const ETATS = {
-  nouveau: ["Nouveau", ""], analyse: ["Analysé, non traduit", "attention"], traduit: ["Traduit, images à générer", "attention"],
+  nouveau: ["Nouveau", ""], recupere: ["Images récupérées, à vérifier", "attention"],
+  recupere_incomplet: ["Images manquantes", "erreur"], analyse: ["Analysé, non traduit", "attention"], traduit: ["Traduit, images à générer", "attention"],
   rendu: ["Prêt", "ok"], erreur: ["Erreur", "erreur"],
 };
 const TYPES = { bulle: "Bulle", narration: "Narration", texte_libre: "Texte libre", onomatopee: "Onomatopée (non traduite)" };
@@ -59,7 +60,8 @@ async function router() {
   const p = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
   $(".nav-reglages").toggleAttribute("aria-current", p[0] === "reglages");
   try {
-    if (p[0] === "serie" && p[1] && p[2] === "ch" && p[3]) await vueChapitre(p[1], p[3]);
+    if (p[0] === "serie" && p[1] && p[2] === "ch" && p[3] && p[4] === "images") await vueImages(p[1], p[3]);
+    else if (p[0] === "serie" && p[1] && p[2] === "ch" && p[3]) await vueChapitre(p[1], p[3]);
     else if (p[0] === "serie" && p[1] && p[2] === "glossaire") await vueGlossaire(p[1]);
     else if (p[0] === "serie" && p[1] && p[2] === "contexte") await vueContexte(p[1]);
     else if (p[0] === "serie" && p[1]) await vueSerie(p[1]);
@@ -125,37 +127,48 @@ async function vueSerie(serie) {
 
   vue.innerHTML = `
     <h1>${esc(serie)}</h1>
-    <p class="sous-titre">Ajoute un chapitre par son lien ou ses images. La traduction tient compte du glossaire et du contexte de la série.</p>
+    <p class="sous-titre">Ajoute un chapitre par son lien, ses images ou une page enregistrée. La traduction tient compte du glossaire et du contexte de la série.</p>
     <div class="grille-serie">
       <div class="pile">
         <form id="f-chap" class="panneau" ${enCours ? "hidden" : ""}>
           <h2>Traduire un chapitre</h2>
           <label class="champ"><span>Numéro du chapitre</span><input type="text" name="numero" value="${esc(suivant)}" required inputmode="decimal"></label>
           <div class="bascule" role="group" aria-label="Source du chapitre">
-            <button type="button" data-src="url" aria-pressed="true">Lien de la page</button>
+            <button type="button" data-src="lien" aria-pressed="true">Lien</button>
             <button type="button" data-src="images" aria-pressed="false">Images</button>
+            <button type="button" data-src="page" aria-pressed="false">Page enregistrée</button>
           </div>
-          <label class="champ" id="zone-url"><span>Lien de la page du chapitre</span>
-            <input type="url" name="url" placeholder="https://…" autocomplete="off">
-            <p class="aide">Pour récupérer tes propres chapitres publiés. Si la page demande une connexion, ajoute plutôt les images.</p></label>
-          <div id="zone-images" hidden>
-            <label class="depot" id="depot" tabindex="0">
-              <input type="file" name="images" accept=".jpg,.jpeg,.png,.webp" multiple hidden>
+          <label class="champ" data-zone="lien"><span>Lien de la page du chapitre</span>
+            <textarea name="url" rows="2" placeholder="https://…" autocomplete="off" spellcheck="false"></textarea>
+            <p class="aide">Chapitre réparti sur plusieurs pages : un lien par ligne, dans l'ordre. Prévu pour récupérer tes propres chapitres publiés.</p></label>
+          <div data-zone="images" hidden>
+            <label class="depot" tabindex="0" data-depot="images">
+              <input type="file" accept=".jpg,.jpeg,.png,.webp,.avif" multiple hidden>
               <span><strong>Dépose les images ici</strong><br>ou clique pour les choisir. Elles sont lues dans l'ordre de leur nom.</span>
             </label>
-            <p class="aide" id="liste-fichiers"></p>
+            <p class="aide" data-liste="images"></p>
           </div>
+          <div data-zone="page" hidden>
+            <label class="depot" tabindex="0" data-depot="page">
+              <input type="file" accept=".html,.htm,.zip,.jpg,.jpeg,.png,.webp,.avif,.gif" multiple hidden>
+              <span><strong>Dépose la page enregistrée</strong><br>le fichier .html et son dossier « _files », ou un .zip des deux.</span>
+            </label>
+            <p class="aide" data-liste="page"></p>
+            <p class="aide">Pour une page qui demande une connexion ou affiche une vérification anti-robot : ouvre-la dans ton navigateur, fais défiler jusqu'en bas, puis Ctrl+S et choisis « Page web complète ».
+              <button type="button" class="btn btn-discret" id="choisir-dossier" style="padding:2px 6px">Choisir le dossier des images</button></p>
+          </div>
+          <label class="case" id="z-verifier" style="margin:4px 0 6px"><input type="checkbox" name="verifier" checked> Vérifier les images avant de traduire</label>
           <button class="btn btn-plein btn-large" style="margin-top:8px">Traduire le chapitre</button>
         </form>
         <section class="panneau suivi" id="suivi" ${enCours ? "" : "hidden"} aria-live="polite"></section>
       </div>
       <div>
-        ${s.chapitres.length ? `<table class="tableau"><thead><tr><th>Chapitre</th><th>État</th><th>Bulles</th><th>À vérifier</th><th>Modifié</th></tr></thead><tbody>
+        ${s.chapitres.length ? `<table class="tableau"><thead><tr><th>Chapitre</th><th>État</th><th>Contenu</th><th>À vérifier</th><th>Modifié</th></tr></thead><tbody>
           ${s.chapitres.slice().reverse().map((c) => {
             const [lib, cl] = ETATS[c.etat] || [c.etat, ""];
-            const h = `#/serie/${enc(serie)}/ch/${enc(c.numero)}`;
+            const h = `#/serie/${enc(serie)}/ch/${enc(c.numero)}${c.etat && c.etat.startsWith("recupere") ? "/images" : ""}`;
             return `<tr data-href="${h}"><td><a href="${h}">Chapitre ${esc(c.numero)}</a></td><td><span class="etiquette ${cl}">${lib}</span></td>
-              <td class="num">${c.bulles}</td><td class="num">${c.a_verifier ? `<span class="etiquette attention">${c.a_verifier}</span>` : "Aucune"}</td>
+              <td class="num">${c.etat && c.etat.startsWith("recupere") ? `${c.images} image(s)` : `${c.bulles} bulle(s)`}</td><td class="num">${c.a_verifier ? `<span class="etiquette attention">${c.a_verifier}</span>` : "Aucune"}</td>
               <td>${dateCourte(c.maj)}</td></tr>`;
           }).join("")}</tbody></table>`
         : `<div class="vide"><h2>Aucun chapitre pour l'instant</h2><p>Colle le lien de ton premier chapitre ou ajoute ses images pour lancer la traduction.</p></div>`}
@@ -163,37 +176,65 @@ async function vueSerie(serie) {
     </div>`;
   lignesCliquables();
 
-  // source : lien ou images
+  // source : lien(s), images ou page enregistrée
   const form = $("#f-chap");
-  let source = "url";
-  let fichiers = [];
+  let source = "lien";
+  const choisis = { images: [], page: [] };
+  const majZones = () => {
+    $$("[data-zone]", form).forEach((z) => { z.hidden = z.dataset.zone !== source; });
+    $("#z-verifier").hidden = source === "images";
+    $("button.btn-plein", form).textContent = source !== "images" && form.verifier.checked ? "Récupérer les images" : "Traduire le chapitre";
+  };
   $$(".bascule button", form).forEach((b) => b.addEventListener("click", () => {
     source = b.dataset.src;
     $$(".bascule button", form).forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
-    $("#zone-url").hidden = source !== "url";
-    $("#zone-images").hidden = source !== "images";
+    majZones();
   }));
-  const depot = $("#depot"), entree = $("input[type=file]", depot);
-  const majFichiers = (fs) => {
-    fichiers = [...fs].filter((f) => /\.(jpe?g|png|webp)$/i.test(f.name)).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-    $("#liste-fichiers").textContent = fichiers.length ? `${fichiers.length} image(s) : ${fichiers.slice(0, 4).map((f) => f.name).join(", ")}${fichiers.length > 4 ? "…" : ""}` : "";
+  form.verifier.addEventListener("change", majZones);
+  const ajouter = (type, fs) => {
+    const liste = [...fs].map((f) => ({ f, nom: f.webkitRelativePath || f.name }));
+    if (type === "images") {
+      choisis.images = liste.filter((x) => /\.(jpe?g|png|webp|avif)$/i.test(x.nom)).sort((a, b) => a.nom.localeCompare(b.nom, undefined, { numeric: true }));
+    } else {
+      const vus = new Set(choisis.page.map((x) => x.nom));
+      choisis.page = choisis.page.concat(liste.filter((x) => !vus.has(x.nom)));
+    }
+    const l = choisis[type];
+    const html = l.filter((x) => /\.(html?|zip)$/i.test(x.nom)).length;
+    $(`[data-liste="${type}"]`).textContent = !l.length ? "" : type === "images"
+      ? `${l.length} image(s) : ${l.slice(0, 4).map((x) => x.nom).join(", ")}${l.length > 4 ? "…" : ""}`
+      : `${l.length} fichier(s), dont ${html} page ou archive${html ? "" : " : ajoute aussi le fichier .html ou le .zip"}.`;
   };
-  entree.addEventListener("change", () => majFichiers(entree.files));
-  depot.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); entree.click(); } });
-  ["dragenter", "dragover"].forEach((t) => depot.addEventListener(t, (e) => { e.preventDefault(); depot.classList.add("survol"); }));
-  ["dragleave", "drop"].forEach((t) => depot.addEventListener(t, (e) => { e.preventDefault(); depot.classList.remove("survol"); }));
-  depot.addEventListener("drop", (e) => majFichiers(e.dataTransfer.files));
+  $$("[data-depot]", form).forEach((depot) => {
+    const type = depot.dataset.depot, entree = $("input[type=file]", depot);
+    entree.addEventListener("change", () => ajouter(type, entree.files));
+    depot.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); entree.click(); } });
+    ["dragenter", "dragover"].forEach((t) => depot.addEventListener(t, (e) => { e.preventDefault(); depot.classList.add("survol"); }));
+    ["dragleave", "drop"].forEach((t) => depot.addEventListener(t, (e) => { e.preventDefault(); depot.classList.remove("survol"); }));
+    depot.addEventListener("drop", (e) => ajouter(type, e.dataTransfer.files));
+  });
+  $("#choisir-dossier").addEventListener("click", () => {
+    const i = document.createElement("input");
+    i.type = "file"; i.multiple = true; i.webkitdirectory = true;
+    i.addEventListener("change", () => ajouter("page", i.files));
+    i.click();
+  });
+  majZones();
 
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const fd = new FormData();
     fd.append("numero", form.numero.value);
-    if (source === "url") {
+    fd.append("mode", source);
+    fd.append("verifier", source !== "images" && form.verifier.checked ? "true" : "false");
+    if (source === "lien") {
       if (!form.url.value.trim()) return toast("Colle le lien de la page du chapitre.", true);
       fd.append("url", form.url.value.trim());
     } else {
-      if (!fichiers.length) return toast("Ajoute au moins une image.", true);
-      fichiers.forEach((f) => fd.append("images", f, f.name));
+      const l = choisis[source];
+      if (!l.length) return toast(source === "images" ? "Ajoute au moins une image." : "Ajoute la page enregistrée.", true);
+      if (source === "page" && !l.some((x) => /\.(html?|zip)$/i.test(x.nom))) return toast("Ajoute le fichier .html de la page, ou un .zip.", true);
+      l.forEach((x) => fd.append("fichiers", x.f, x.nom));
     }
     try {
       const t = await api("POST", `/api/series/${enc(serie)}/chapitres`, fd);
@@ -210,8 +251,11 @@ function suivre(tid, el, fini) {
   el.hidden = false;
   const dessiner = (t) => {
     const idx = ETAPES.findIndex(([k]) => k === t.etape);
-    const titre = t.etat === "erreur" ? "La traduction s'est arrêtée" : t.etat === "termine" ? "Chapitre traduit" : `Chapitre ${esc(t.chapitre)} en cours`;
-    const etapes = t.type === "rendu" ? ETAPES.slice(5) : t.type === "traduction" ? ETAPES.slice(4) : ETAPES;
+    const recup = t.type === "recuperation";
+    const titre = t.etat === "erreur" ? (recup ? "La récupération s'est arrêtée" : "La traduction s'est arrêtée")
+      : t.etat === "termine" ? (recup ? "Images récupérées" : "Chapitre traduit") : `Chapitre ${esc(t.chapitre)} en cours`;
+    const etapes = recup ? ETAPES.slice(0, 1) : t.type === "rendu" ? ETAPES.slice(5) : t.type === "traduction" ? ETAPES.slice(4) : ETAPES;
+    const lienImages = `#/serie/${enc(t.serie)}/ch/${enc(t.chapitre)}/images`;
     el.innerHTML = `<h2>${titre}</h2>
       <ol>${etapes.map(([k, lib]) => {
         const i = ETAPES.findIndex(([x]) => x === k);
@@ -220,8 +264,10 @@ function suivre(tid, el, fini) {
       }).join("")}</ol>
       ${t.etat === "en_cours" || t.etat === "en_attente" ? `<div class="jauge"><div style="width:${Math.round((t.fraction ?? 0) * 100)}%"></div></div>` : ""}
       <p class="message-travail">${esc(t.etat === "termine" ? "" : t.message)}</p>
-      ${t.erreur ? `<div class="boite-erreur">${esc(t.erreur)}</div><p><button class="btn" id="reprendre" type="button">Fermer</button></p>` : ""}
-      ${t.etat === "termine" ? `<p><a class="btn btn-plein btn-large" href="#/serie/${enc(t.serie)}/ch/${enc(t.chapitre)}">Relire le chapitre ${esc(t.chapitre)}</a></p>` : ""}`;
+      ${t.erreur ? `<div class="boite-erreur">${esc(t.erreur)}</div><p class="actions" style="margin-top:12px">
+        ${recup && ["manquantes", "vide"].includes(t.cause) ? `<a class="btn" href="${lienImages}">Voir ce qui a été récupéré</a>` : ""}<button class="btn" id="reprendre" type="button">Fermer</button></p>` : ""}
+      ${t.etat === "termine" ? (recup ? `<p><a class="btn btn-plein btn-large" href="${lienImages}">Vérifier les images</a></p>`
+        : `<p><a class="btn btn-plein btn-large" href="#/serie/${enc(t.serie)}/ch/${enc(t.chapitre)}">Relire le chapitre ${esc(t.chapitre)}</a></p>`) : ""}`;
     const b = $("#reprendre", el);
     if (b) b.addEventListener("click", fini);
   };
@@ -231,7 +277,7 @@ function suivre(tid, el, fini) {
       dessiner(t);
       if (t.etat === "termine" || t.etat === "erreur") {
         arreterPollers();
-        if (t.etat === "termine") toast(`Chapitre ${t.chapitre} terminé.`);
+        if (t.etat === "termine") toast(t.type === "recuperation" ? `Images du chapitre ${t.chapitre} récupérées.` : `Chapitre ${t.chapitre} terminé.`);
       }
     } catch (e) { arreterPollers(); el.innerHTML = `<div class="boite-erreur">${esc(e.message)}</div>`; }
   };
@@ -242,7 +288,9 @@ function suivre(tid, el, fini) {
 /* ---------- relecture d'un chapitre ---------- */
 async function vueChapitre(serie, numero) {
   nav(serie, "chapitres");
-  let d = await api("GET", `/api/series/${enc(serie)}/chapitres/${enc(numero)}`);
+  let d;
+  try { d = await api("GET", `/api/series/${enc(serie)}/chapitres/${enc(numero)}`); }
+  catch (e) { location.replace(`#/serie/${enc(serie)}/ch/${enc(numero)}/images`); return; }
   let mode = d.images.length ? "traduit" : "original";
   let filtre = false;
   let active = null;
@@ -258,6 +306,7 @@ async function vueChapitre(serie, numero) {
       <div><p class="fil"><a href="#/serie/${enc(serie)}">${esc(serie)}</a> / chapitre ${esc(numero)}</p>
         <h1>Chapitre ${esc(numero)}</h1></div>
       <div class="actions">
+        <a class="btn btn-discret" href="#/serie/${enc(serie)}/ch/${enc(numero)}/images">Images source</a>
         <button class="btn" id="b-retraduire" type="button">Retraduire</button>
         <button class="btn" id="b-rendu" type="button">Mettre à jour les images</button>
         <a class="btn" id="b-lecteur" href="${d.base}/sortie/index.html" target="_blank" rel="noopener">Ouvrir le lecteur</a>
@@ -428,6 +477,90 @@ async function vueChapitre(serie, numero) {
   const travaux = await api("GET", "/api/travaux");
   const t = travaux.find((x) => x.serie === serie && x.chapitre === numero && ["en_attente", "en_cours"].includes(x.etat));
   if (t) suivre(t.id, $("#suivi-chap"), () => { $("#suivi-chap").hidden = true; });
+}
+
+/* ---------- vérification des images récupérées ---------- */
+const STATUTS = { gardee: ["Gardée", "ok"], ecartee: ["Écartée", ""], manquante: ["Manquante", "erreur"], echec: ["Non téléchargée", ""] };
+const METHODES = { html: "lecture de la page", script: "données de la page", navigateur: "navigateur sans interface", page_enregistree: "page enregistrée" };
+
+async function vueImages(serie, numero) {
+  nav(serie, "chapitres");
+  const racine = `/api/series/${enc(serie)}/chapitres/${enc(numero)}`;
+  let r;
+  try { r = await api("GET", `${racine}/source`); }
+  catch (e) {
+    vue.innerHTML = `<p class="fil"><a href="#/serie/${enc(serie)}">${esc(serie)}</a> / chapitre ${esc(numero)}</p><h1>Images du chapitre ${esc(numero)}</h1>
+      <div class="vide"><h2>Pas de récupération enregistrée</h2><p>Ce chapitre a été créé à partir d'images importées, ou ses images n'ont pas encore été récupérées.</p>
+      <p><a class="btn" href="#/serie/${enc(serie)}">Retour aux chapitres</a></p></div>`;
+    return;
+  }
+  const dessiner = () => {
+    const res = r.resume, gardees = r.images.filter((i) => i.statut === "gardee");
+    const manquantes = r.images.filter((i) => i.statut === "manquante");
+    const v = Date.now();
+    vue.innerHTML = `
+      <div class="entete-chapitre">
+        <div><p class="fil"><a href="#/serie/${enc(serie)}">${esc(serie)}</a> / chapitre ${esc(numero)}</p>
+          <h1>Images du chapitre ${esc(numero)}</h1></div>
+        <div class="actions">
+          ${r.liens && r.liens.length ? `<button class="btn" id="b-relancer" type="button">Relancer la récupération</button>` : ""}
+          ${r.traduit ? `<a class="btn" href="#/serie/${enc(serie)}/ch/${enc(numero)}">Relire la traduction</a>` : ""}
+          <button class="btn btn-plein" id="b-traduire" type="button" ${gardees.length ? "" : "disabled"}>${r.traduit ? "Retraduire avec ces images" : "Traduire ce chapitre"}</button>
+        </div>
+      </div>
+      <div class="resume-recup">
+        <p><strong class="num">${res.gardees}</strong> image(s) gardée(s), <span class="num">${res.hauteur_px.toLocaleString("fr-FR")}</span> px de bande${res.ecartees ? `, ${res.ecartees} écartée(s)` : ""}${res.manquantes ? `, <span class="txt-erreur">${res.manquantes} manquante(s)</span>` : ""}.
+          Récupérées par ${METHODES[r.methode] || r.methode}${r.liens && r.liens.length > 1 ? ` sur ${r.liens.length} pages` : ""}.</p>
+        ${(r.avertissements || []).map((a) => `<p class="avert">${esc(a)}</p>`).join("")}
+        <p class="aide">Les images sont lues de haut en bas dans cet ordre. Écarte ce qui n'appartient pas au chapitre (publicité, page d'un autre chapitre), ou reprends une image écartée à tort.</p>
+      </div>
+      <section class="planche" id="planche">
+        ${r.images.map((i) => {
+          const [lib, cl] = STATUTS[i.statut] || [i.statut, ""];
+          const vignette = i.fichier ? `<img src="${r.base}/${enc(i.fichier)}?v=${v}" alt="Image ${i.ordre + 1}" loading="lazy">` : `<div class="sans-image">${i.statut === "manquante" ? "Image manquante" : "Pas d'image"}</div>`;
+          const bouton = !i.fichier ? "" : i.statut === "gardee"
+            ? `<button class="btn btn-discret" type="button" data-ecarter="${i.ordre}">Écarter</button>`
+            : `<button class="btn" type="button" data-garder="${i.ordre}">Garder</button>`;
+          return `<figure class="vignette ${i.statut}">
+            <div class="cadre-vignette">${vignette}<span class="num-vignette">${i.ordre + 1}</span></div>
+            <figcaption><span class="etiquette ${cl}">${lib}</span>
+              ${i.largeur ? `<span class="dim num">${i.largeur}×${i.hauteur}</span>` : ""}
+              ${i.raison ? `<span class="raison">${esc(i.raison)}</span>` : ""}
+              <a class="url" href="${esc(i.url.startsWith("http") ? i.url : "#")}" target="_blank" rel="noopener noreferrer" title="${esc(i.url)}">${esc(i.url.split("/").pop().split("?")[0] || i.url)}</a>
+              ${bouton}</figcaption></figure>`;
+        }).join("")}
+      </section>
+      <section class="panneau suivi" id="suivi-img" hidden aria-live="polite" style="margin-top:16px"></section>`;
+
+    $$("[data-garder],[data-ecarter]").forEach((b) => b.addEventListener("click", async () => {
+      const corps = b.dataset.garder !== undefined ? { garder: [+b.dataset.garder] } : { ecarter: [+b.dataset.ecarter] };
+      try { r = await api("PUT", `${racine}/source`, corps); dessiner(); } catch (e) { toast(e.message, true); }
+    }));
+    const rel = $("#b-relancer");
+    if (rel) rel.addEventListener("click", async () => {
+      try { const t = await api("POST", `${racine}/source/relancer`); suivre(t.id, $("#suivi-img"), () => router()); attendre(t.id); }
+      catch (e) { toast(e.message, true); }
+    });
+    $("#b-traduire").addEventListener("click", async () => {
+      if (manquantes.length && !confirm(`${manquantes.length} image(s) du chapitre manquent : la traduction aura un trou à cet endroit. Continuer quand même ?`)) return;
+      try { const t = await api("POST", `${racine}/traduire`); suivre(t.id, $("#suivi-img"), () => router()); $("#suivi-img").scrollIntoView({ block: "center" }); }
+      catch (e) { toast(e.message, true); }
+    });
+  };
+  const attendre = (tid) => {
+    const i = setInterval(async () => {
+      const t = await api("GET", `/api/travaux/${tid}`);
+      if (t.etat === "termine" || t.etat === "erreur") {
+        clearInterval(i);
+        try { r = await api("GET", `${racine}/source`); dessiner(); } catch { /* rien à montrer */ }
+      }
+    }, 1200);
+    pollers.push(i);
+  };
+  dessiner();
+  const travaux = await api("GET", "/api/travaux");
+  const t = travaux.find((x) => x.serie === serie && x.chapitre === numero && ["en_attente", "en_cours"].includes(x.etat));
+  if (t) { suivre(t.id, $("#suivi-img"), () => router()); if (t.type === "recuperation") attendre(t.id); }
 }
 
 /* ---------- glossaire ---------- */

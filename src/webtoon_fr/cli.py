@@ -5,7 +5,7 @@ import argparse
 from pathlib import Path
 
 from . import pipeline
-from .fetch import recuperer
+from .fetch import importer_page_enregistree, recuperer
 from .models import dossier_chapitre
 
 
@@ -38,7 +38,8 @@ def main(argv=None):
 
     for nom, aide in (("run", "tout faire"), ("analyze", "phase 1 : analyse + traduction"), ("fetch", "récupérer les images")):
         s = sp.add_parser(nom, help=aide)
-        s.add_argument("source", help="lien de la page du chapitre, ou dossier d'images")
+        s.add_argument("source", nargs="+",
+                       help="lien(s) de la page du chapitre dans l'ordre, dossier d'images, ou page enregistrée (.html / .zip)")
         s.add_argument("--serie", required=True)
         s.add_argument("--chapitre", required=True)
 
@@ -55,20 +56,30 @@ def main(argv=None):
     if a.cmd == "render":
         pipeline.rendre_chapitre(a.serie, a.chapitre, _progres)
         return
-    url, fichiers = None, None
-    if a.source.startswith(("http://", "https://")):
+    url, fichiers, page = None, None, None
+    if all(s.startswith(("http://", "https://")) for s in a.source):
         url = a.source
+    elif len(a.source) == 1 and Path(a.source[0]).is_dir() and not any(Path(a.source[0]).glob("*.htm*")):
+        d = Path(a.source[0])
+        fichiers = sorted(f for f in d.iterdir() if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".avif"})
     else:
-        d = Path(a.source)
-        fichiers = sorted(f for f in d.iterdir() if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"})
+        page = []
+        for s in a.source:
+            q = Path(s)
+            page += [f for f in q.rglob("*") if f.is_file()] if q.is_dir() else [q]
+    dossier = dossier_chapitre(a.serie, a.chapitre)
     if a.cmd == "fetch":
-        if not url:
-            p.error("fetch attend un lien")
-        recuperer(url, dossier_chapitre(a.serie, a.chapitre) / "source", lambda m, f=None: print(m))
+        if url:
+            recuperer(url, dossier / "source", lambda m, f=None: print(m))
+        elif page:
+            importer_page_enregistree(page, dossier / "source", lambda m, f=None: print(m))
+        else:
+            p.error("fetch attend un ou plusieurs liens, ou une page enregistrée")
+        print(f"Images dans {dossier / 'source'} (détail : rapport.json)")
     elif a.cmd == "analyze":
-        pipeline.analyser(a.serie, a.chapitre, url, fichiers, _progres)
+        pipeline.analyser(a.serie, a.chapitre, url, fichiers, _progres, page_enregistree=page)
     else:
-        pipeline.tout(a.serie, a.chapitre, url, fichiers, _progres)
+        pipeline.tout(a.serie, a.chapitre, url, fichiers, _progres, page_enregistree=page)
 
 
 if __name__ == "__main__":

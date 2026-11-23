@@ -8,13 +8,16 @@ fonts = "fonts"
 modeles = "~/.cache/webtoon-fr"
 
 [recuperation]
-largeur_min = 600          # px : images plus étroites écartées
-poids_min_ko = 10          # Ko : images plus légères écartées
-requetes_paralleles = 2
-pause_s = 0.5
-essais = 3
-hauteur_min_bande = 3000   # px : en dessous, récupération jugée incomplète
+largeur_min = 300          # px : en dessous, icône ou image de remplacement
+tolerance_largeur = 0.08   # écart toléré avec la largeur dominante des pages du chapitre
 images_min = 3
+images_max = 600           # au-delà, ce n'est probablement pas un seul chapitre
+hauteur_min_bande = 3000   # px : en dessous, récupération jugée incomplète
+taille_max_mo = 60         # par image
+requetes_paralleles = 2
+pause_s = 0.4
+essais = 4
+autoriser_manques = false  # true : continuer même si des images du chapitre manquent
 
 [detection]
 moteur = "auto"            # auto | rtdetr | ocr
